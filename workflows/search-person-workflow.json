@@ -1,0 +1,192 @@
+{
+  "name": "Buscar Pessoa por Nome na Mensagem",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "search-person",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - Receber Mensagem",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "search-person-webhook"
+    },
+    {
+      "parameters": {
+        "functionCode": "// Extrair nomes da mensagem recebida\nconst message = $input.item.json.body.message || $input.item.json.message || '';\n\nif (!message) {\n  return [{\n    json: {\n      success: false,\n      error: 'Nenhuma mensagem fornecida',\n      message: message\n    }\n  }];\n}\n\n// Lista de palavras que não são nomes\nconst STOP_WORDS = [\n  'o', 'a', 'os', 'as', 'um', 'uma', 'whatsapp', 'email',\n  'senhor', 'senhora', 'dr', 'dra', 'doutor', 'doutora'\n];\n\n// Função para extrair nomes\nfunction extractNames(text) {\n  const names = [];\n  \n  // Padrão 1: \"falar com [Nome]\" ou similar\n  const contextPatterns = [\n    /(?:falar com|entregar para|enviar para|contatar|ligar para|mensagem para|agendar com|reunião com|encontrar com|conversar com)\\s+([A-ZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÇ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+(?:\\s+[A-ZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÇ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)*)/gi\n  ];\n  \n  contextPatterns.forEach(pattern => {\n    const matches = text.matchAll(pattern);\n    for (const match of matches) {\n      if (match[1]) {\n        names.push(match[1].trim());\n      }\n    }\n  });\n  \n  // Padrão 2: Nomes próprios (palavras com maiúscula)\n  const namePattern = /\\b([A-ZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÇ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]{2,}(?:\\s+(?:da|de|do|das|dos|e)\\s+)?(?:[A-ZÀÁÂÃÄÅÈÉÊËÌÍÎÏÒÓÔÕÖÙÚÛÜÇ][a-zàáâãäåçèéêëìíîïñòóôõöùúûüý]+)*)\\b/g;\n  const matches = text.matchAll(namePattern);\n  \n  for (const match of matches) {\n    const name = match[1].trim();\n    const nameLower = name.toLowerCase();\n    \n    // Filtrar stop words e nomes muito curtos\n    if (name.length >= 3 && !STOP_WORDS.includes(nameLower)) {\n      const words = name.split(/\\s+/);\n      // Aceitar se tem 2+ palavras ou não é início comum de frase\n      if (words.length >= 2) {\n        names.push(name);\n      }\n    }\n  }\n  \n  // Remover duplicatas\n  return [...new Set(names)];\n}\n\nconst extractedNames = extractNames(message);\n\nreturn [{\n  json: {\n    success: true,\n    message: message,\n    extractedNames: extractedNames,\n    totalNamesFound: extractedNames.length\n  }\n}];"
+      },
+      "id": "extract-names",
+      "name": "Extrair Nomes da Mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.totalNamesFound }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "check-names-found",
+      "name": "Nomes Encontrados?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Preparar cada nome para busca individual\nconst names = $input.item.json.extractedNames || [];\nconst message = $input.item.json.message;\n\nconst output = names.map(name => ({\n  json: {\n    searchName: name,\n    originalMessage: message,\n    // Variações do nome para busca\n    nameVariations: [\n      name,\n      name.toLowerCase(),\n      name.toUpperCase(),\n      // Primeiro nome\n      name.split(' ')[0],\n      // Nome completo sem acentos (para busca flexível)\n      name.normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    ]\n  }\n}));\n\nreturn output;"
+      },
+      "id": "prepare-search",
+      "name": "Preparar Busca por Nome",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM pessoas \nWHERE \n  LOWER(nome_completo) LIKE LOWER('%{{ $json.searchName }}%')\n  OR LOWER(nome_completo) LIKE LOWER('%{{ $json.nameVariations[0] }}%')\n  OR LOWER(primeiro_nome) LIKE LOWER('%{{ $json.nameVariations[3] }}%')\nLIMIT 10",
+        "options": {}
+      },
+      "id": "search-database",
+      "name": "Buscar no Banco de Dados",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1050, 200],
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "PostgreSQL - Pessoas"
+        }
+      },
+      "notes": "Ajuste a query conforme sua estrutura de banco de dados.\nPode usar MySQL, PostgreSQL, MongoDB, etc."
+    },
+    {
+      "parameters": {
+        "functionCode": "// Consolidar resultados da busca\nconst allResults = [];\n\n// Processar todos os itens de entrada\nfor (const item of $input.all()) {\n  if (item.json.nome_completo) {\n    allResults.push({\n      nome: item.json.nome_completo,\n      email: item.json.email,\n      telefone: item.json.telefone,\n      id: item.json.id,\n      searchedName: item.json.searchName || 'N/A',\n      // Adicione outros campos relevantes do seu banco\n    });\n  }\n}\n\n// Remover duplicatas por ID\nconst uniqueResults = {};\nallResults.forEach(result => {\n  if (!uniqueResults[result.id]) {\n    uniqueResults[result.id] = result;\n  }\n});\n\nreturn [{\n  json: {\n    success: true,\n    totalFound: Object.keys(uniqueResults).length,\n    pessoas: Object.values(uniqueResults),\n    originalMessage: $input.first().json.originalMessage\n  }\n}];"
+      },
+      "id": "consolidate-results",
+      "name": "Consolidar Resultados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}"
+      },
+      "id": "response-success",
+      "name": "Resposta - Pessoas Encontradas",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"message\": \"Nenhum nome encontrado na mensagem\", \"originalMessage\": $json.message } }}"
+      },
+      "id": "response-no-names",
+      "name": "Resposta - Nenhum Nome Encontrado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [850, 400]
+    }
+  ],
+  "connections": {
+    "Webhook - Receber Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Extrair Nomes da Mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair Nomes da Mensagem": {
+      "main": [
+        [
+          {
+            "node": "Nomes Encontrados?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nomes Encontrados?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Busca por Nome",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resposta - Nenhum Nome Encontrado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Busca por Nome": {
+      "main": [
+        [
+          {
+            "node": "Buscar no Banco de Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar no Banco de Dados": {
+      "main": [
+        [
+          {
+            "node": "Consolidar Resultados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar Resultados": {
+      "main": [
+        [
+          {
+            "node": "Resposta - Pessoas Encontradas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2025-10-21T00:00:00.000Z",
+  "versionId": "1"
+}

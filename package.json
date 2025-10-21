@@ -1,0 +1,26 @@
+{
+  "name": "feynman-n8n",
+  "version": "1.0.0",
+  "description": "Sistema automatizado para extrair nomes de pessoas de mensagens e buscar na base de dados",
+  "main": "functions/extractNames.js",
+  "scripts": {
+    "test": "node tests/test-extract-names.js",
+    "test:full": "node tests/test-full-search.js",
+    "test:all": "npm run test && npm run test:full"
+  },
+  "keywords": [
+    "n8n",
+    "nlp",
+    "name-extraction",
+    "pessoa",
+    "busca",
+    "mentory",
+    "mapa-identificacao"
+  ],
+  "author": "Mentory - Queila Trizotti",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kiaquo981/feynman-n8n.git"
+  }
+}
